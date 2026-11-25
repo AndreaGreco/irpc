@@ -3,7 +3,6 @@ package irpcgen
 import (
 	"encoding"
 	"fmt"
-	"io"
 	"math"
 )
 
@@ -225,8 +224,10 @@ func DecSlice[S ~[]E, E any](dec *Decoder, sl *S, elemType string, elemDecFnc fu
 	if err != nil {
 		return fmt.Errorf("deserialize slice len: %w", err)
 	}
-	lsl := make(S, l)
+	lsl := make(S, 0, min(l, maxPreallocElems))
 	for i := range l {
+		var zero E
+		lsl = append(lsl, zero)
 		if err := elemDecFnc(dec, &lsl[i]); err != nil {
 			return fmt.Errorf("deserialize slice element of type %q: %w", elemType, err)
 		}
@@ -272,7 +273,7 @@ func DecMap[M ~map[K]V, K comparable, V any](dec *Decoder, m *M, kName string, k
 	if err != nil {
 		return fmt.Errorf("deserialize map len: %w", err)
 	}
-	lm := make(M, l)
+	lm := make(M, min(l, maxPreallocElems))
 	for range l {
 		var k K
 		if err := kDecFunc(dec, &k); err != nil {
@@ -357,8 +358,8 @@ func DecByteSlice[T ~[]byte](dec *Decoder, v *T) error {
 		return fmt.Errorf("deserialize len: %w", err)
 	}
 
-	s := make([]byte, l)
-	if _, err := io.ReadFull(dec.r, s); err != nil {
+	s, err := dec.bytes(l)
+	if err != nil {
 		return err
 	}
 	*v = s
@@ -425,7 +426,7 @@ func DecBoolSlice[T ~[]bool](dec *Decoder, v *T) error {
 		return fmt.Errorf("slice len: %w", err)
 	}
 
-	s := make([]bool, 0, l)
+	s := make([]bool, 0, min(l, maxPreallocBytes))
 
 	for len(s) < l {
 		b, err := dec.r.ReadByte()

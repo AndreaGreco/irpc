@@ -6,6 +6,14 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"slices"
+)
+
+// Limits on what is allocated on the strength of a length read from the peer,
+// before any of the data it announces has been read. They do not limit the size of messages.
+const (
+	maxPreallocBytes = 64 << 10
+	maxPreallocElems = 256
 )
 
 // Decoder is a binary decoder that reads various data types from an io.Reader.
@@ -86,7 +94,28 @@ func (d *Decoder) len() (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("slice len: %w", err)
 	}
+	if l64 > math.MaxInt {
+		return 0, fmt.Errorf("len %d overflows int", l64)
+	}
 	return int(l64), nil
+}
+
+// bytes reads l bytes. l comes from the peer, so memory grows with the data that
+// actually arrives rather than being allocated up front.
+func (d *Decoder) bytes(l int) ([]byte, error) {
+	s := make([]byte, 0, min(l, maxPreallocBytes))
+	for len(s) < l {
+		have := len(s)
+		n := min(l-have, max(have, maxPreallocBytes))
+		s = slices.Grow(s, n)[:have+n]
+		if _, err := io.ReadFull(d.r, s[have:]); err != nil {
+			if have > 0 && err == io.EOF {
+				err = io.ErrUnexpectedEOF
+			}
+			return nil, err
+		}
+	}
+	return s, nil
 }
 
 func (d *Decoder) float32le() (float32, error) {
@@ -120,12 +149,7 @@ func (d *Decoder) byteSliceNonNil() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("slice len: %w", err)
 	}
-	s := make([]byte, l)
-	if _, err := io.ReadFull(d.r, s); err != nil {
-		return nil, err
-	}
-
-	return s, nil
+	return d.bytes(l)
 }
 
 func (d *Decoder) string() (string, error) {
